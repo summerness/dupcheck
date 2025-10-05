@@ -1,0 +1,9 @@
+phash_bits: 64
+phash_thresh: 10
+tile_grid: 8
+tile_hamming_thresh: 6
+orb_max_features: 2000
+orb_inliers_thresh: 25
+orb_inlier_ratio: 0.25
+ncc_thresh: 0.92
+topk_recall: 50

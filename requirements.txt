@@ -1,0 +1,8 @@
+opencv-python
+numpy
+Pillow
+imagehash
+faiss-cpu
+tqdm
+matplotlib
+piexif
