@@ -98,15 +98,15 @@ The script writes `tune_results.csv` containing TP/FP/FN counts for each paramet
 <summary id="中文"><strong>中文</strong></summary>
 
 ### 项目简介
-DupCheck 面向理赔审核中的骗赔手段：外包维修人员重复提交或轻度篡改旧照片。系统会把新上传图片与历史图库逐一比对，识别完全重复、局部重复、旋转翻转和轻度改动的图像，并输出便于人工复核的证据。
+DupCheck 聚焦理赔审核中的骗赔套路：重复提交、裁剪拼接、亮度/压缩篡改等。系统会把新上传图片与历史图库逐一比对，识别完全重复、局部重复、旋转/翻转及轻度改动的图像，并输出便于人工复核的证据。
 
-项目仅依赖常见 Python 图像库，可直接集成到现有的上传或后台审核流程。
+项目依赖常见的 Python 图像 / 深度学习库，可嵌入现有的上传或后台审核流程。
 
 ### 检测流程
-1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、块哈希，并缓存 ORB 关键点，确保几何变换仍能被召回。
-2. **召回候选**：新图片通过 pHash/块哈希匹配，如有需要再结合多姿态 ORB 匹配，将旋转、翻转的嫌疑图也纳入候选集。
-3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，若单应关系稳定，则在相应区域做 NCC 判断是否为 `exact_patch`。
-4. **结果输出**：检测结果写入 `dup_report.csv`，命令行可生成对照证据图，辅助人工审核。
+1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、块哈希、缓存 ORB 关键点，并可生成 ResNet-18 嵌入，确保几何和粗语义变化也能被召回。
+2. **召回候选**：新图片通过 pHash/块哈希匹配，并可结合基于 ResNet-18 的 FAISS 向量检索；如有需要再执行多姿态 ORB 匹配，把旋转、翻转的嫌疑图拉入候选集。
+3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，若单应关系稳定，则在对应区域做 NCC，判断是否为 `exact_patch`。
+4. **结果输出**：检测结论写入 `dup_report.csv`，命令行可生成对照证据图，辅助人工审核。
 
 ### 目录结构
 - `duplicate_check/` —— 核心模块（`features`、`indexer`、`matcher`、`report`）。
@@ -117,7 +117,7 @@ DupCheck 面向理赔审核中的骗赔手段：外包维修人员重复提交�
 - `data/` —— 文档示例所用的合成数据集。
 
 ### 环境依赖
-建议在 Python 3.9+ 中创建虚拟环境，并安装 `requirements.txt` 列出的依赖。缺少 Pillow、OpenCV、imagehash 时会自动降级，但完整功能需要这些包。
+建议在 Python 3.9+ 中创建虚拟环境，并安装 `requirements.txt` 列出的依赖。OpenCV、Pillow、imagehash、`torch`、`torchvision` 与可选的 `faiss-cpu` 能启用全部功能，缺失时流程会自动降级。
 
 ```bash
 python -m venv .venv
@@ -140,6 +140,16 @@ pip install -r requirements.txt
      --rebuild_index
    ```
 3. 查看 `reports/dup_report.csv` 及生成的证据图片。
+4. （可选）对合成标注集进行评估，查看召回差异：
+   ```bash
+   python tools/verify_synthetic.py \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --labels data/synth_labels.csv \
+     --phash_thresh 16 \
+     --orb_inliers_thresh 6 \
+     --ncc_thresh 0.85
+   ```
 
 如需复用已有索引，可省略 `--rebuild_index`。可通过 `--phash_thresh`、`--orb_inliers_thresh`、`--ncc_thresh` 调整查准率与召回率之间的权衡。
 
