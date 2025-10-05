@@ -17,6 +17,11 @@ try:
 except Exception:
     cv2 = None
 
+try:
+    import faiss
+except Exception:
+    faiss = None
+
 
 _DB_ORB_VARIANT_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -165,6 +170,47 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
             hits.setdefault(img_id, {"score": 0.0, "reason": []})
             hits[img_id]["score"] += cnt / (len(q_tiles) or 1)
             hits[img_id]["reason"].append(("tiles", cnt))
+
+    # Vector-based recall via FAISS (optional)
+    vector_index = index.get("vector") if isinstance(index, dict) else None
+    if vector_index and np is not None and faiss is not None:
+        q_emb = getattr(features, "embedding", None)
+        if q_emb is None and hasattr(features, "_path"):
+            try:
+                from duplicate_check.features import compute_embedding
+
+                q_emb = compute_embedding(Path(features._path))
+            except Exception:
+                q_emb = None
+        try:
+            if q_emb is not None:
+                vec = np.asarray(q_emb, dtype=np.float32)
+                if vec.ndim == 1 and vec.size > 0:
+                    norm = np.linalg.norm(vec)
+                    if norm > 0:
+                        vec = vec / norm
+                    vec = vec.reshape(1, -1)
+                    index_obj = vector_index.get("index")
+                    ids = vector_index.get("ids", [])
+                    metric = vector_index.get("metric", "ip")
+                    if index_obj is not None and len(ids):
+                        topn = min(max(topk, 10), len(ids))
+                        D, I = index_obj.search(vec, topn)
+                        for dist, idx_id in zip(D[0], I[0]):
+                            if idx_id < 0 or idx_id >= len(ids):
+                                continue
+                            db_id = ids[idx_id]
+                            if metric == "ip":
+                                score = float(dist)
+                            else:
+                                score = float(1.0 / (1.0 + dist))
+                            if score <= 0:
+                                continue
+                            entry = hits.setdefault(db_id, {"score": 0.0, "reason": []})
+                            entry["score"] += score
+                            entry.setdefault("reason", []).append(("vector", score))
+        except Exception:
+            pass
 
     # Orientation-aware ORB scoring
     query_path = None

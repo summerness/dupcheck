@@ -15,10 +15,12 @@ DupCheck targets a recurring fraud scenario in repair claims: contractors upload
 The implementation is pure Python and depends only on widely available imaging libraries, which keeps integration with existing intake or back-office pipelines straightforward.
 
 ### Detection flow
-1. **Index build** – gallery images are converted to multiple perceptual hashes (original, rotations, flips), tile hashes, and cached ORB descriptors so geometric tweaks remain discoverable.
-2. **Candidate recall** – a new upload is matched through pHash buckets and tile voting; if necessary, orientation-aware ORB matching pulls in additional suspects.
+1. **Index build** – gallery images are converted to multiple perceptual hashes (original, rotations, flips), tile hashes, cached ORB descriptors, and optional ResNet-18 embeddings so geometric tweaks and coarse semantics remain discoverable.
+2. **Candidate recall** – a new upload is matched through pHash buckets, tile voting, and optional FAISS (ResNet-18) vector search; if necessary, orientation-aware ORB matching pulls in additional suspects.
 3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch promotes the match to `exact_patch`.
 4. **Reporting** – matches are recorded in `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
+
+> **Scaling tip:** For very large galleries or cluster deployments, replace the in-process FAISS index with an external vector database (e.g., Milvus, Qdrant, Pinecone). A natural hook is the `duplicate_check/indexer.py::build_index` / `load_index_from_db` functions—swap the FAISS `IndexFlatIP` creation for remote writes, and query that service inside `matcher.recall_candidates` before running ORB reranking.
 
 ### Project layout
 - `duplicate_check/` — core modules (`features`, `indexer`, `matcher`, `report`).
@@ -29,7 +31,7 @@ The implementation is pure Python and depends only on widely available imaging l
 - `data/` — synthetic dataset used in docs and examples.
 
 ### Requirements
-Install the dependencies from `requirements.txt` inside a Python 3.9+ environment. Pillow, OpenCV, and imagehash unlock full functionality; the code degrades gracefully if some extras are missing.
+Install the dependencies from `requirements.txt` inside a Python 3.9+ environment. Pillow, OpenCV, imagehash, `torch`, `torchvision`, and (optionally) `faiss-cpu` unlock the full feature set; the code degrades gracefully if some extras are missing.
 
 ```bash
 python -m venv .venv
@@ -52,6 +54,16 @@ pip install -r requirements.txt
      --rebuild_index
    ```
 3. Inspect `reports/dup_report.csv` alongside the generated evidence JPEGs.
+4. (Optional) Benchmark on the synthetic labels and inspect mismatches:
+   ```bash
+   python tools/verify_synthetic.py \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --labels data/synth_labels.csv \
+     --phash_thresh 16 \
+     --orb_inliers_thresh 6 \
+     --ncc_thresh 0.85
+   ```
 
 Drop `--rebuild_index` to reuse a cached index. Tune `--phash_thresh`, `--orb_inliers_thresh`, and `--ncc_thresh` to explore different precision/recall tradeoffs.
 

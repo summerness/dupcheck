@@ -19,7 +19,7 @@ If OpenCV/imagehash/Pillow are missing, functions will raise ImportError.
 如果系统缺少 OpenCV/imagehash/Pillow，函数会进行降级或抛出异常。
 """
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
 import hashlib
 import io
@@ -46,12 +46,24 @@ try:
 except Exception:
     cv2 = None
 
+try:
+    import torch
+    from torchvision import models
+    TORCH_AVAILABLE = True
+except Exception:
+    torch = None
+    models = None
+    TORCH_AVAILABLE = False
+
+_EMBED_MODEL = None
+_EMBED_TRANSFORM = None
 
 @dataclass
 class ImageFeatures:
     phash: str
     orb: Dict[str, Any]
     size: Tuple[int, int]
+    embedding: Optional[Any] = None
 
 
 def compute_phash(image_path: Path, hash_size: int = 8) -> str:
@@ -91,6 +103,84 @@ def compute_phash_variants(image_path: Path, hash_size: int = 8) -> List[str]:
         if v not in seen:
             seen.append(v)
     return seen
+
+
+def _load_embedder():
+    global _EMBED_MODEL, _EMBED_TRANSFORM
+    if not TORCH_AVAILABLE:
+        return None, None
+    if _EMBED_MODEL is not None and _EMBED_TRANSFORM is not None:
+        return _EMBED_MODEL, _EMBED_TRANSFORM
+    try:
+        weights = None
+        try:
+            weights = models.ResNet18_Weights.DEFAULT  # type: ignore[attr-defined]
+        except Exception:
+            weights = None
+        if weights is not None:
+            model = models.resnet18(weights=weights)
+            transform = weights.transforms()
+        else:
+            model = models.resnet18(pretrained=True)
+            from torchvision import transforms
+
+            transform = transforms.Compose(
+                [
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225],
+                    ),
+                ]
+            )
+        model.fc = torch.nn.Identity()
+        model.eval()
+        model.to("cpu")
+        _EMBED_MODEL = model
+        _EMBED_TRANSFORM = transform
+    except Exception:
+        _EMBED_MODEL = None
+        _EMBED_TRANSFORM = None
+    return _EMBED_MODEL, _EMBED_TRANSFORM
+
+
+def _fallback_embedding(image_path: Path, size: int = 64) -> Optional[Any]:
+    if np is None or not PIL_AVAILABLE or Image is None:
+        return None
+    try:
+        img = Image.open(str(image_path)).convert("RGB")
+        img = img.resize((size, size))
+        arr = np.asarray(img, dtype=np.float32)
+        if arr.size == 0:
+            return None
+        arr = arr / 255.0
+        emb = arr.reshape(-1)
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            emb = emb / norm
+        return emb
+    except Exception:
+        return None
+
+
+def compute_embedding(image_path: Path) -> Optional[Any]:
+    """Compute a ResNet18 embedding (falls back to RGB thumbnail)."""
+    model, transform = _load_embedder()
+    if model is not None and transform is not None and Image is not None:
+        try:
+            img = Image.open(str(image_path)).convert("RGB")
+            tensor = transform(img).unsqueeze(0)
+            with torch.no_grad():
+                vec = model(tensor.to("cpu")).squeeze(0).numpy()
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            return vec.astype("float32")
+        except Exception:
+            pass
+    return _fallback_embedding(image_path)
 
 
 def compute_tile_hashes(image_path: Path, grid: int = 8, hash_size: int = 8) -> List[Tuple[str, Tuple[int, int, int, int]]]:
@@ -148,17 +238,23 @@ def compute_features(image_path: Path, orb_max_features: int = 2000, tile_grid: 
     except Exception:
         orb = {"kps": [], "descs": None}
     size = (0, 0)
+    embedding = None
     if PIL_AVAILABLE and Image is not None:
         try:
             img = Image.open(str(image_path))
             size = img.size
         except Exception:
             size = (0, 0)
-    feats = ImageFeatures(phash=ph, orb=orb, size=size)
+    try:
+        embedding = compute_embedding(image_path)
+    except Exception:
+        embedding = None
+    feats = ImageFeatures(phash=ph, orb=orb, size=size, embedding=embedding)
     # attach source path for downstream tile recall
     # 将源路径附加到特征对象，以便后续 tile 召回使用
     try:
         feats._path = str(image_path)
     except Exception:
         pass
+    feats.embedding = embedding
     return feats

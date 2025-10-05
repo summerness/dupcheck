@@ -1,16 +1,34 @@
-"""Index utilities with in-memory + SQLite backends supporting tile lookups."""
+"""Index utilities with in-memory + SQLite backends supporting tile & vector lookups."""
 from contextlib import closing
 import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict
 
-from duplicate_check.features import compute_phash, compute_tile_hashes, compute_phash_variants
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+try:
+    import faiss
+except Exception:
+    faiss = None
+
+from duplicate_check.features import (
+    compute_phash,
+    compute_tile_hashes,
+    compute_phash_variants,
+    compute_embedding,
+)
 
 
 def build_index(db_dir: Path, tile_grid: int = 8) -> Dict[str, Any]:
     """Build an in-memory index containing phash and tile hashes."""
-    idx = {"by_id": {}, "by_phash": {}, "by_tile": {}}
+    idx = {"by_id": {}, "by_phash": {}, "by_tile": {}, "vector": None}
+    use_vectors = faiss is not None and np is not None
+    vector_embeddings = []
+    vector_ids = []
     for p in sorted(db_dir.iterdir()):
         if not p.is_file():
             continue
@@ -30,6 +48,25 @@ def build_index(db_dir: Path, tile_grid: int = 8) -> Dict[str, Any]:
                 bucket.append(pid)
         for th, bbox in tiles:
             idx["by_tile"].setdefault(th, []).append((pid, bbox))
+        if use_vectors:
+            try:
+                emb_val = compute_embedding(p)
+                if emb_val is None:
+                    continue
+                emb = np.asarray(emb_val, dtype=np.float32)
+                if emb.ndim == 1 and emb.size > 0:
+                    vector_embeddings.append(emb)
+                    vector_ids.append(pid)
+            except Exception:
+                continue
+    if use_vectors and vector_embeddings:
+        try:
+            mat = np.stack(vector_embeddings).astype("float32")
+            index = faiss.IndexFlatIP(mat.shape[1])
+            index.add(mat)
+            idx["vector"] = {"index": index, "ids": vector_ids, "metric": "ip"}
+        except Exception:
+            idx["vector"] = None
     return idx
 
 
@@ -136,4 +173,33 @@ def load_index_from_db(db_path: Path) -> Dict[str, Any]:
             bucket = idx["by_phash"].setdefault(ph, [])
             if img_id not in bucket:
                 bucket.append(img_id)
+    # Build vector index on demand
+    use_vectors = faiss is not None and np is not None
+    vector_embeddings = []
+    vector_ids = []
+    if use_vectors:
+        for img_id, rec in idx["by_id"].items():
+            path = Path(rec.get("path", ""))
+            try:
+                emb = compute_embedding(path)
+            except Exception:
+                emb = None
+            if emb is None:
+                continue
+            try:
+                arr = np.asarray(emb, dtype=np.float32)
+            except Exception:
+                continue
+            if arr.ndim != 1 or arr.size == 0:
+                continue
+            vector_embeddings.append(arr)
+            vector_ids.append(img_id)
+    if use_vectors and vector_embeddings:
+        try:
+            mat = np.stack(vector_embeddings).astype("float32")
+            index = faiss.IndexFlatIP(mat.shape[1])
+            index.add(mat)
+            idx["vector"] = {"index": index, "ids": vector_ids, "metric": "ip"}
+        except Exception:
+            idx["vector"] = None
     return idx

@@ -6,10 +6,12 @@ DupCheck addresses a recurring issue in repair-claim workflows: contractors reus
 The pipeline is entirely Python based and keeps dependencies minimal so it can be embedded in existing intake or review systems.
 
 ## Detection flow
-1. **Index build** – each gallery image is converted to multiple perceptual hashes (original, rotations, flips), tile hashes, and cached ORB descriptors to support geometric changes.
-2. **Candidate recall** – a new upload is compared with the index via pHash buckets and tile voting; if needed, multi-orientation ORB matching pulls in additional suspects.
+1. **Index build** – each gallery image is converted to multiple perceptual hashes (original, rotations, flips), tile hashes, cached ORB descriptors, and optional ResNet-18 embeddings to support geometric and coarse semantic changes.
+2. **Candidate recall** – a new upload is compared with the index via pHash buckets, tile voting, and optional FAISS (ResNet-18) vector search; if needed, multi-orientation ORB matching pulls in additional suspects.
 3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch upgrades matches to `exact_patch`.
 4. **Reporting** – results are written to `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
+
+> **Scaling tip:** If the gallery grows beyond what in-process FAISS can handle, replace the FAISS block in `duplicate_check/indexer.py` / `load_index_from_db` with writes to Milvus, Qdrant, Pinecone, etc., and query that service from `matcher.recall_candidates` before ORB reranking.
 
 ## Project layout
 - `duplicate_check/` — core library modules (`features`, `indexer`, `matcher`, `report`).
@@ -20,7 +22,7 @@ The pipeline is entirely Python based and keeps dependencies minimal so it can b
 - `data/` — sample synthetic dataset used by the documentation examples.
 
 ## Requirements
-Install dependencies listed in `requirements.txt` inside a Python 3.9+ environment. OpenCV, Pillow, and imagehash enable the full feature set; the pipeline falls back gracefully if some extras are unavailable.
+Install dependencies listed in `requirements.txt` inside a Python 3.9+ environment. OpenCV, Pillow, imagehash, `torch`, `torchvision`, and (optionally) `faiss-cpu` enable the full feature set; the pipeline falls back gracefully if some extras are unavailable.
 
 ```bash
 python -m venv .venv
@@ -43,6 +45,16 @@ pip install -r requirements.txt
      --rebuild_index
    ```
 3. Inspect `reports/dup_report.csv` and the generated evidence JPEGs.
+4. (Optional) Benchmark on the labelled synthetic set and review mismatches:
+   ```bash
+   python tools/verify_synthetic.py \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --labels data/synth_labels.csv \
+     --phash_thresh 16 \
+     --orb_inliers_thresh 6 \
+     --ncc_thresh 0.85
+   ```
 
 To reuse an existing index, drop the `--rebuild_index` flag. Tweak `--phash_thresh`, `--orb_inliers_thresh`, and `--ncc_thresh` to experiment with precision/recall.
 
