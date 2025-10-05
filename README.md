@@ -1,75 +1,159 @@
-# DupCheck — 图片重复与伪造检测（中英双语说明）
+# DupCheck — Duplicate & Tamper Detection / 图片重复与伪造检测
 
-English
--------
-DupCheck is a minimal, extensible prototype for duplicate / tamper detection
-on uploaded repair images. It provides a pipeline that performs:
+<div align="right">
+  <a href="#english">English</a> | <a href="#中文">中文</a>
+</div>
 
-- fast recall (perceptual hash, tile-hash)
-- fine-grained verification (ORB feature matching + RANSAC)
-- precise patch equality check (NCC template matching)
-- report generation (CSV + evidence images)
+---
 
+<details open>
+<summary id="english"><strong>English</strong></summary>
 
-中文
-----
-DupCheck 是一个用于检测维修图片重复与伪造的最小可扩展原型。它实现了：
+### Overview
+DupCheck targets a recurring fraud scenario in repair claims: contractors upload recycled or lightly edited photos to claim duplicate reimbursements. The system compares every new image against a reference gallery, flags exact copies, crops, rotations/flips, and subtle edits, then produces reviewer-friendly evidence.
 
-- 快速召回（感知哈希 pHash、块哈希 Tile-hash）
-- 精排验证（ORB 特征匹配 + RANSAC）
-- 精确子图一致性判断（标准化互相关 NCC）
-- 报告输出（CSV + 证据图片）
+The implementation is pure Python and depends only on widely available imaging libraries, which keeps integration with existing intake or back-office pipelines straightforward.
 
-仓库结构 / Repository layout
------------------------------
-- `duplicate_check/` — 核心模块
-  - `features.py` — pHash、tile-hash、ORB 特征提取
-  - `indexer.py` — 索引构建（内存/SQLite）与持久化接口
-  - `matcher.py` — 召回、精排、判定逻辑
-  - `report.py` — CSV 与证据图生成
-- `dupcheck_cli.py` — 命令行入口（索引构建 + 批量检测）
-- `tools/` — 辅助脚本（合成数据、阈值调优）
-- `data/` — 示例/合成数据（推荐放图库与待测图片）
-- `requirements.txt` — 推荐依赖
+### Detection flow
+1. **Index build** – gallery images are converted to multiple perceptual hashes (original, rotations, flips), tile hashes, and cached ORB descriptors so geometric tweaks remain discoverable.
+2. **Candidate recall** – a new upload is matched through pHash buckets and tile voting; if necessary, orientation-aware ORB matching pulls in additional suspects.
+3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch promotes the match to `exact_patch`.
+4. **Reporting** – matches are recorded in `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
 
-快速开始 / Quick Start
------------------------
-1. 创建并激活虚拟环境（推荐）：
+### Project layout
+- `duplicate_check/` — core modules (`features`, `indexer`, `matcher`, `report`).
+- `dupcheck_cli.py` — main CLI with in-memory and SQLite index support.
+- `duplicate_check.py` — legacy entrypoint kept for backward compatibility.
+- `tools/` — helpers for synthetic data generation and threshold tuning.
+- `tests/` & `run_smoke.py` — minimal smoke coverage for the end-to-end flow.
+- `data/` — synthetic dataset used in docs and examples.
+
+### Requirements
+Install the dependencies from `requirements.txt` inside a Python 3.9+ environment. Pillow, OpenCV, and imagehash unlock full functionality; the code degrades gracefully if some extras are missing.
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-2. 生成或准备示例数据（可用 `tools/generate_synthetic.py`）：
+### Quick start
+1. Generate the demo dataset:
+   ```bash
+   python tools/generate_synthetic.py --out_dir data --count 5
+   ```
+2. Rebuild the SQLite index and run detection:
+   ```bash
+   python dupcheck_cli.py \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --out_dir reports \
+     --index_db ./index.db \
+     --rebuild_index
+   ```
+3. Inspect `reports/dup_report.csv` alongside the generated evidence JPEGs.
 
+Drop `--rebuild_index` to reuse a cached index. Tune `--phash_thresh`, `--orb_inliers_thresh`, and `--ncc_thresh` to explore different precision/recall tradeoffs.
+
+### CLI examples
 ```bash
-python tools/generate_synthetic.py --out_dir data --count 5
-```
-
-3. 重建并使用 SQLite 索引，然后运行检测：
-
-```bash
+# Rebuild index for fresh data
 python dupcheck_cli.py --db_dir data/synth_db --input_dir data/synth_new --out_dir reports --index_db ./index.db --rebuild_index
+
+# Run with custom thresholds
+python dupcheck_cli.py --db_dir data/synth_db --input_dir data/synth_new --out_dir reports --phash_thresh 12 --orb_inliers_thresh 30 --ncc_thresh 0.94
+
+# Quick scan using the cached index
+python dupcheck_cli.py --db_dir data/synth_db --input_dir data/synth_new --out_dir reports --index_db ./index.db
 ```
 
-4. 输出：`reports/dup_report.csv`（CSV）与证据图片（reports/*.jpg）
-
-重要参数 / Key thresholds
----------------------------
-- `phash_thresh`（pHash Hamming distance）: 默认 10（召回阈值，可通过 CLI `--phash_thresh` 调整）
-- `orb_inliers_thresh`（ORB 内点数阈值）: 默认 25（精排阈值，可通过 `--orb_inliers_thresh` 调整）
-- `ncc_thresh`（NCC 峰值）: 默认 0.92（判断 exact_patch 的阈值，可通过 `--ncc_thresh` 调整）
-
-阈值调优 / Tuning thresholds
-----------------------------
-使用 `tools/tune_thresholds.py` 在带标注的合成/真实数据上做网格搜索：
+### Threshold tuning
+Use `tools/tune_thresholds.py` with the synthetic labels to sweep detection thresholds:
 
 ```bash
-. .venv/bin/activate
-python tools/tune_thresholds.py --labels data/synth_labels.csv --db_dir data/synth_db --input_dir data/synth_new --out_dir /tmp/tune_out
+python tools/tune_thresholds.py \
+  --labels data/synth_labels.csv \
+  --db_dir data/synth_db \
+  --input_dir data/synth_new \
+  --out_dir reports/tune_out
 ```
 
+The script writes `tune_results.csv` containing TP/FP/FN counts for each parameter combo so you can lock in thresholds for your own dataset.
 
+</details>
+
+<details>
+<summary id="中文"><strong>中文</strong></summary>
+
+### 项目简介
+DupCheck 面向理赔审核中的骗赔手段：外包维修人员重复提交或轻度篡改旧照片。系统会把新上传图片与历史图库逐一比对，识别完全重复、局部重复、旋转翻转和轻度改动的图像，并输出便于人工复核的证据。
+
+项目仅依赖常见 Python 图像库，可直接集成到现有的上传或后台审核流程。
+
+### 检测流程
+1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、块哈希，并缓存 ORB 关键点，确保几何变换仍能被召回。
+2. **召回候选**：新图片通过 pHash/块哈希匹配，如有需要再结合多姿态 ORB 匹配，将旋转、翻转的嫌疑图也纳入候选集。
+3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，若单应关系稳定，则在相应区域做 NCC 判断是否为 `exact_patch`。
+4. **结果输出**：检测结果写入 `dup_report.csv`，命令行可生成对照证据图，辅助人工审核。
+
+### 目录结构
+- `duplicate_check/` —— 核心模块（`features`、`indexer`、`matcher`、`report`）。
+- `dupcheck_cli.py` —— 主命令行工具，支持内存或 SQLite 索引。
+- `duplicate_check.py` —— 保留的兼容性入口脚本。
+- `tools/` —— 合成数据生成、阈值调参等辅助脚本。
+- `tests/` 与 `run_smoke.py` —— 端到端冒烟验证。
+- `data/` —— 文档示例所用的合成数据集。
+
+### 环境依赖
+建议在 Python 3.9+ 中创建虚拟环境，并安装 `requirements.txt` 列出的依赖。缺少 Pillow、OpenCV、imagehash 时会自动降级，但完整功能需要这些包。
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 快速体验
+1. 生成示例数据集：
+   ```bash
+   python tools/generate_synthetic.py --out_dir data --count 5
+   ```
+2. 重建 SQLite 索引并运行检测：
+   ```bash
+   python dupcheck_cli.py \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --out_dir reports \
+     --index_db ./index.db \
+     --rebuild_index
+   ```
+3. 查看 `reports/dup_report.csv` 及生成的证据图片。
+
+如需复用已有索引，可省略 `--rebuild_index`。可通过 `--phash_thresh`、`--orb_inliers_thresh`、`--ncc_thresh` 调整查准率与召回率之间的权衡。
+
+### 常用命令
+```bash
+# 重建索引
+python dupcheck_cli.py --db_dir data/synth_db --input_dir data/synth_new --out_dir reports --index_db ./index.db --rebuild_index
+
+# 自定义阈值运行
+python dupcheck_cli.py --db_dir data/synth_db --input_dir data/synth_new --out_dir reports --phash_thresh 12 --orb_inliers_thresh 30 --ncc_thresh 0.94
+
+# 使用已有索引快速扫描
+python dupcheck_cli.py --db_dir data/synth_db --input_dir data/synth_new --out_dir reports --index_db ./index.db
+```
+
+### 阈值调参
+使用 `tools/tune_thresholds.py` 对阈值组合进行网格搜索：
+
+```bash
+python tools/tune_thresholds.py \
+  --labels data/synth_labels.csv \
+  --db_dir data/synth_db \
+  --input_dir data/synth_new \
+  --out_dir reports/tune_out
+```
+
+脚本会输出 `tune_results.csv`，包含每组参数的 TP/FP/FN 统计，可据此锁定适合业务数据的阈值。
+
+</details>

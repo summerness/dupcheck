@@ -68,6 +68,31 @@ def compute_phash(image_path: Path, hash_size: int = 8) -> str:
     return h.hexdigest()[:16]
 
 
+def compute_phash_variants(image_path: Path, hash_size: int = 8) -> List[str]:
+    """Return a list of pHash values including simple geometric variants."""
+    if not PIL_AVAILABLE or imagehash is None:
+        return [compute_phash(image_path, hash_size=hash_size)]
+    variants: List[str] = []
+    with Image.open(str(image_path)) as img:
+        base = img.convert("RGB")
+        transforms = [
+            base,
+            base.rotate(90, expand=True),
+            base.rotate(180, expand=True),
+            base.rotate(270, expand=True),
+            base.transpose(Image.FLIP_LEFT_RIGHT),
+            base.transpose(Image.FLIP_TOP_BOTTOM),
+        ]
+        for im in transforms:
+            variants.append(imagehash.phash(im, hash_size=hash_size).__str__())
+    # deduplicate while preserving order
+    seen: List[str] = []
+    for v in variants:
+        if v not in seen:
+            seen.append(v)
+    return seen
+
+
 def compute_tile_hashes(image_path: Path, grid: int = 8, hash_size: int = 8) -> List[Tuple[str, Tuple[int, int, int, int]]]:
     """Split image into grid x grid tiles and compute pHash per tile.
 
@@ -137,4 +162,3 @@ def compute_features(image_path: Path, orb_max_features: int = 2000, tile_grid: 
     except Exception:
         pass
     return feats
-

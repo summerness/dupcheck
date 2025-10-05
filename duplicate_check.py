@@ -4,7 +4,6 @@
 This script wires the components together and provides a simple CLI.
 """
 import argparse
-import os
 from pathlib import Path
 
 # ...existing code...
@@ -38,7 +37,7 @@ def main():
         print(f"Checking {img_path.name}...")
         feats = features.compute_features(img_path)
         cand = matcher.recall_candidates(feats, idx, topk=args.topk)
-        detailed = matcher.rerank_and_verify(img_path, cand)
+        detailed = matcher.rerank_and_verify(img_path, cand, idx)
         results.extend(detailed)
 
     csv_path = out_dir / "dup_report.csv"
