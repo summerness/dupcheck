@@ -10,7 +10,7 @@
 <summary id="english"><strong>English</strong></summary>
 
 ### Overview
-DupCheck targets a recurring fraud scenario in repair claims: contractors upload recycled or lightly edited photos to claim duplicate reimbursements. The system compares every new image against a reference gallery, flags exact copies, crops, rotations/flips, and subtle edits, then produces reviewer-friendly evidence.
+DupCheck targets broader duplicate/tamper detection needs: It works for insurance claim review, content moderation, e-commerce authenticity checks, and copyright protection. It was originally a submodule built to stop third-party repair contractors from re-uploading maintenance photos to claim duplicate reimbursements; I later spun it out, optimised it, and generalised it for additional scenarios. The system compares every new image against a reference gallery, flags exact copies, crops, rotations/flips, and subtle edits, then produces reviewer-friendly evidence.
 
 The implementation is pure Python and depends only on widely available imaging libraries, which keeps integration with existing intake or back-office pipelines straightforward.
 
@@ -104,13 +104,13 @@ The script writes `tune_results.csv` containing TP/FP/FN counts for each paramet
 
 </details>
 
-<details>
+<details open>
 <summary id="中文"><strong>中文</strong></summary>
 
 ### 项目简介
-DupCheck 面向广义的“图库去重 / 篡改检测”场景：不仅可用于理赔审核，也适合内容审核、电商验真、图像版权保护等业务。它最初诞生于防止第三方维修工重复上传维修照片骗取维修资金的需求，如今扩展为通用的重复/篡改检测工具。系统会把新上传图片与历史图库逐一比对，识别完全重复、局部重复、旋转/翻转及轻度改动的图像，并输出便于人工复核的证据。
+DupCheck 面向广义的“图库去重 / 篡改检测”场景：不仅可用于理赔审核，也适合内容审核、电商验真、图像版权保护等业务。它最初用于防止第三方维修工重复上传维修照片骗取维修资金，原为某项目的子模块；后来我将其独立化、优化，并扩展为通用的重复与篡改检测工具，可适用于更多场景。系统会把新上传图片与历史图库逐一比对，识别完全重复、局部重复、旋转/翻转及轻度改动的图像，并输出便于人工复核的证据。
 
-项目依赖常见的 Python 图像 / 深度学习库，可嵌入各类上传管线或后台审核流程。
+项目依赖常见的 Python 图像 / 深度学习库，可嵌入各类上传管线或后台审核流程。 
 
 ### 检测流程
 1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、多尺度块哈希、缓存 ORB 关键点，并可生成 ResNet-18 / CLIP 嵌入，确保几何和粗语义变化也能被召回。
