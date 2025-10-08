@@ -23,7 +23,7 @@ except Exception:
     faiss = None
 
 
-_DB_ORB_VARIANT_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+_DB_FEATURE_VARIANT_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
 
 def hamming_distance_hex(a: str, b: str) -> int:
@@ -53,8 +53,24 @@ def _count_good_matches(desc1, desc2, ratio: float = 0.75) -> int:
             return 0
     except Exception:
         return 0
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-    matches = bf.knnMatch(desc1, desc2, k=2)
+    dtype1 = getattr(desc1, "dtype", None)
+    dtype2 = getattr(desc2, "dtype", None)
+    norm = cv2.NORM_HAMMING
+    if dtype1 is not None:
+        if dtype1 == np.float32:
+            norm = cv2.NORM_L2
+        elif dtype1 == np.uint8:
+            norm = cv2.NORM_HAMMING
+    if dtype1 is not None and dtype2 is not None and dtype1 != dtype2:
+        try:
+            desc2 = desc2.astype(dtype1)
+        except Exception:
+            pass
+    bf = cv2.BFMatcher(norm, crossCheck=False)
+    try:
+        matches = bf.knnMatch(desc1, desc2, k=2)
+    except cv2.error:
+        return 0
     good = 0
     for pair in matches:
         if len(pair) != 2:
@@ -65,20 +81,42 @@ def _count_good_matches(desc1, desc2, ratio: float = 0.75) -> int:
     return good
 
 
-def _compute_orb_variants_for_path(path: Path, cache: Dict[str, List[Dict[str, Any]]] | None = None, max_features: int = 2000) -> List[Dict[str, Any]]:
+def _variant_orientation(name: Optional[str]) -> str:
+    if not name:
+        return ""
+    parts = name.split("_", 1)
+    return parts[1] if len(parts) == 2 else parts[0]
+
+
+def _compute_feature_variants_for_path(
+    path: Path,
+    cache: Dict[str, List[Dict[str, Any]]] | None = None,
+    max_features: int = 2000,
+) -> List[Dict[str, Any]]:
     key = str(path)
     if cache is not None and key in cache:
         return cache[key]
 
     variants: List[Dict[str, Any]] = []
     if cv2 is None:
-        variants.append({"name": "rot0", "kps": [], "descs": None})
+        variants.append({"name": "orb_rot0", "algo": "orb", "kps": [], "descs": None})
+        variants.append({"name": "akaze_rot0", "algo": "akaze", "kps": [], "descs": None})
     else:
         img = cv2.imread(str(path))
         if img is None:
-            variants.append({"name": "rot0", "kps": [], "descs": None})
+            variants.append({"name": "orb_rot0", "algo": "orb", "kps": [], "descs": None})
+            variants.append({"name": "akaze_rot0", "algo": "akaze", "kps": [], "descs": None})
         else:
-            orb = cv2.ORB_create(nfeatures=max_features)
+            detectors: List[Tuple[str, Any]] = []
+            try:
+                detectors.append(("orb", cv2.ORB_create(nfeatures=max_features)))
+            except Exception:
+                detectors.append(("orb", None))
+            try:
+                detectors.append(("akaze", cv2.AKAZE_create()))
+            except Exception:
+                detectors.append(("akaze", None))
+
             transforms = [
                 ("rot0", img),
                 ("rot90", cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)),
@@ -86,31 +124,38 @@ def _compute_orb_variants_for_path(path: Path, cache: Dict[str, List[Dict[str, A
                 ("rot270", cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)),
             ]
             flip = cv2.flip(img, 1)
-            transforms.extend([
-                ("flip0", flip),
-                ("flip90", cv2.rotate(flip, cv2.ROTATE_90_CLOCKWISE)),
-            ])
+            transforms.extend(
+                [
+                    ("flip0", flip),
+                    ("flip90", cv2.rotate(flip, cv2.ROTATE_90_CLOCKWISE)),
+                ]
+            )
 
-            seen = set()
-            for name, mat in transforms:
-                if mat is None or name in seen:
-                    continue
-                seen.add(name)
-                try:
-                    gray = cv2.cvtColor(mat, cv2.COLOR_BGR2GRAY)
-                except Exception:
-                    variants.append({"name": name, "kps": [], "descs": None})
-                    continue
-                kps, descs = orb.detectAndCompute(gray, None)
-                variants.append({"name": name, "kps": kps or [], "descs": descs})
+            for algo, detector in detectors:
+                seen = set()
+                for name, mat in transforms:
+                    variant_name = f"{algo}_{name}"
+                    if mat is None or variant_name in seen:
+                        continue
+                    seen.add(variant_name)
+                    if detector is None:
+                        variants.append({"name": variant_name, "algo": algo, "kps": [], "descs": None})
+                        continue
+                    try:
+                        gray = cv2.cvtColor(mat, cv2.COLOR_BGR2GRAY)
+                    except Exception:
+                        variants.append({"name": variant_name, "algo": algo, "kps": [], "descs": None})
+                        continue
+                    kps, descs = detector.detectAndCompute(gray, None)
+                    variants.append({"name": variant_name, "algo": algo, "kps": kps or [], "descs": descs})
 
     if cache is not None:
         cache[key] = variants
     return variants
 
 
-def _get_db_orb_variants(path: Path) -> List[Dict[str, Any]]:
-    return _compute_orb_variants_for_path(path, _DB_ORB_VARIANT_CACHE)
+def _get_db_feature_variants(path: Path) -> List[Dict[str, Any]]:
+    return _compute_feature_variants_for_path(path, _DB_FEATURE_VARIANT_CACHE)
 
 
 def _best_orb_match(q_variants: List[Dict[str, Any]], db_variants: List[Dict[str, Any]]) -> Tuple[int, int, Optional[Tuple[str, str]]]:
@@ -158,18 +203,22 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
     except Exception:
         q_tiles = None
 
-    # 如果能够计算 query 的 tile-hash，则进行基于块的召回
     if q_tiles:
-        tile_counts = {}
-        for th, bbox in q_tiles:
-            for (img_id, tbbox) in index.get("by_tile", {}).get(th, []):
+        tile_counts: Dict[str, int] = {}
+        for tile in q_tiles:
+            th = tile.get("hash")
+            if not th:
+                continue
+            for entry in index.get("by_tile", {}).get(th, []):
+                img_id = entry.get("img_id")
+                if img_id is None:
+                    continue
                 tile_counts.setdefault(img_id, 0)
                 tile_counts[img_id] += 1
-        # add tile-derived scores
         for img_id, cnt in tile_counts.items():
-            hits.setdefault(img_id, {"score": 0.0, "reason": []})
-            hits[img_id]["score"] += cnt / (len(q_tiles) or 1)
-            hits[img_id]["reason"].append(("tiles", cnt))
+            entry = hits.setdefault(img_id, {"score": 0.0, "reason": []})
+            entry["score"] += cnt / (len(q_tiles) or 1)
+            entry.setdefault("reason", []).append(("tiles", cnt))
 
     # Vector-based recall via FAISS (optional)
     vector_index = index.get("vector") if isinstance(index, dict) else None
@@ -223,7 +272,7 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
     q_variants: List[Dict[str, Any]] = []
     if query_path is not None:
         try:
-            q_variants = _compute_orb_variants_for_path(query_path)
+            q_variants = _compute_feature_variants_for_path(query_path)
         except Exception:
             q_variants = []
 
@@ -234,7 +283,7 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
             rec = index.get("by_id", {}).get(img_id)
             if rec is None:
                 continue
-            db_variants = _get_db_orb_variants(Path(rec["path"]))
+            db_variants = _get_db_feature_variants(Path(rec["path"]))
             best_good, best_len, best_pair = _best_orb_match(q_variants, db_variants)
             if best_good <= 0 or best_pair is None:
                 continue
@@ -249,7 +298,7 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
             for img_id, rec in index.get("by_id", {}).items():
                 if img_id in hits:
                     continue
-                db_variants = _get_db_orb_variants(Path(rec["path"]))
+                db_variants = _get_db_feature_variants(Path(rec["path"]))
                 best_good, best_len, best_pair = _best_orb_match(q_variants, db_variants)
                 if best_good < ORB_FALLBACK_MIN or best_pair is None:
                     continue
@@ -282,8 +331,29 @@ def _orb_ransac_inliers(kps1, desc1, kps2, desc2, ratio=0.75, ransac_thresh=5.0)
     """
     if cv2 is None or np is None or desc1 is None or desc2 is None:
         return 0, 0.0, None, None, []
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-    matches = bf.knnMatch(desc1, desc2, k=2)
+    try:
+        if len(desc1) == 0 or len(desc2) == 0:
+            return 0, 0.0, None, None, []
+    except Exception:
+        return 0, 0.0, None, None, []
+    dtype1 = getattr(desc1, "dtype", None)
+    dtype2 = getattr(desc2, "dtype", None)
+    if dtype1 is not None and dtype2 is not None and dtype1 != dtype2:
+        try:
+            desc2 = desc2.astype(dtype1)
+            dtype2 = dtype1
+        except Exception:
+            pass
+    if dtype1 is None or dtype2 is None:
+        return 0, 0.0, None, None, []
+    if desc1.shape[1] != desc2.shape[1]:
+        return 0, 0.0, None, None, []
+    norm = cv2.NORM_HAMMING if dtype1 == np.uint8 else cv2.NORM_L2
+    bf = cv2.BFMatcher(norm, crossCheck=False)
+    try:
+        matches = bf.knnMatch(desc1, desc2, k=2)
+    except cv2.error:
+        return 0, 0.0, None, None, []
     good = []
     for m_n in matches:
         if len(m_n) != 2:
@@ -295,7 +365,16 @@ def _orb_ransac_inliers(kps1, desc1, kps2, desc2, ratio=0.75, ransac_thresh=5.0)
         return 0, 0.0, None, None, good
     src_pts = np.float32([kps1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
     dst_pts = np.float32([kps2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, ransac_thresh)
+    method = getattr(cv2, "USAC_MAGSAC", cv2.RANSAC)
+    try:
+        H, mask = cv2.findHomography(src_pts, dst_pts, method, ransac_thresh)
+    except Exception:
+        H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, ransac_thresh)
+    if mask is None and method != cv2.RANSAC:
+        try:
+            H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, ransac_thresh)
+        except Exception:
+            mask = None
     if mask is None:
         return 0, 0.0, None, H, good
     inliers = int(mask.sum())
@@ -339,7 +418,7 @@ def rerank_and_verify(
     rows: List[Dict[str, Any]] = []
 
     try:
-        q_variants = _compute_orb_variants_for_path(input_path)
+        q_variants = _compute_feature_variants_for_path(input_path)
     except Exception:
         q_variants = []
     q_map = {var.get("name"): var for var in q_variants}
@@ -351,7 +430,7 @@ def rerank_and_verify(
         if db_rec is None:
             continue
         db_path = Path(db_rec["path"])
-        db_variants = _get_db_orb_variants(db_path)
+        db_variants = _get_db_feature_variants(db_path)
         d_map = {var.get("name"): var for var in db_variants}
         has_db_orb = any(_has_descriptors(v) for v in db_variants)
 
@@ -388,6 +467,8 @@ def rerank_and_verify(
                     "d": d_var,
                     "q_name": q_name,
                     "d_name": d_name,
+                    "algo_q": q_var.get("algo", "orb"),
+                    "algo_d": d_var.get("algo", "orb"),
                     "inliers": inliers,
                     "inlier_ratio": inlier_ratio,
                     "matches": good_matches,
@@ -429,10 +510,16 @@ def rerank_and_verify(
             tiles = db_rec.get("tiles", [])
             if (
                 tiles
-                and best["q_name"] == "rot0"
-                and best["d_name"] == "rot0"
+                and best.get("algo_q") == "orb"
+                and best.get("algo_d") == "orb"
+                and _variant_orientation(best.get("q_name")) == "rot0"
+                and _variant_orientation(best.get("d_name")) == "rot0"
             ):
-                _, bbox = tiles[len(tiles) // 2]
+                tile_entry = tiles[len(tiles) // 2]
+                if isinstance(tile_entry, dict):
+                    bbox = tile_entry.get("bbox", (0, 0, 0, 0))
+                else:
+                    bbox = tile_entry[1]
                 try:
                     ncc_peak = _ncc_peak(input_path, db_path, bbox)
                 except Exception:

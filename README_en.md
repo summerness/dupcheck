@@ -6,12 +6,12 @@ DupCheck addresses a recurring issue in repair-claim workflows: contractors reus
 The pipeline is entirely Python based and keeps dependencies minimal so it can be embedded in existing intake or review systems.
 
 ## Detection flow
-1. **Index build** – each gallery image is converted to multiple perceptual hashes (original, rotations, flips), tile hashes, cached ORB descriptors, and optional ResNet-18 embeddings to support geometric and coarse semantic changes.
-2. **Candidate recall** – a new upload is compared with the index via pHash buckets, tile voting, and optional FAISS (ResNet-18) vector search; if needed, multi-orientation ORB matching pulls in additional suspects.
+1. **Index build** – each gallery image is converted to multiple perceptual hashes (original, rotations, flips), multi-scale tile hashes, cached ORB descriptors, and optional ResNet-18 / CLIP embeddings to support geometric and coarse semantic changes.
+2. **Candidate recall** – a new upload is compared with the index via pHash buckets, tile voting, and optional FAISS (ResNet-18/CLIP) vector search; if needed, multi-orientation ORB matching pulls in additional suspects.
 3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch upgrades matches to `exact_patch`.
 4. **Reporting** – results are written to `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
 
-> **Scaling tip:** If the gallery grows beyond what in-process FAISS can handle, replace the FAISS block in `duplicate_check/indexer.py` / `load_index_from_db` with writes to Milvus, Qdrant, Pinecone, etc., and query that service from `matcher.recall_candidates` before ORB reranking.
+> **Scaling tip:** Set `DUPC_VECTOR_INDEX=ivf_pq` or `hnsw` to switch the built-in FAISS index; for even larger deployments, replace the FAISS block in `duplicate_check/indexer.py` / `load_index_from_db` with writes to Milvus, Qdrant, Pinecone, etc., and query that service from `matcher.recall_candidates` before ORB reranking.
 
 ## Project layout
 - `duplicate_check/` — core library modules (`features`, `indexer`, `matcher`, `report`).
@@ -29,6 +29,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Optional extras: install `faiss-cpu` (for ANN recall) and either `open-clip-torch` or `clip` if you want CLIP-ViT embeddings in addition to ResNet.
 
 ## Quick start
 1. Generate the demo dataset:

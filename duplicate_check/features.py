@@ -47,6 +47,13 @@ except Exception:
     cv2 = None
 
 try:
+    import clip
+    CLIP_AVAILABLE = True
+except Exception:
+    clip = None
+    CLIP_AVAILABLE = False
+
+try:
     import torch
     from torchvision import models
     TORCH_AVAILABLE = True
@@ -57,6 +64,12 @@ except Exception:
 
 _EMBED_MODEL = None
 _EMBED_TRANSFORM = None
+_CLIP_MODEL = None
+_CLIP_PREPROCESS = None
+_CLIP_MODEL = None
+_CLIP_PREPROCESS = None
+
+MULTISCALE_LEVELS: Tuple[float, ...] = (1.0, 0.75, 0.5)
 
 @dataclass
 class ImageFeatures:
@@ -80,21 +93,37 @@ def compute_phash(image_path: Path, hash_size: int = 8) -> str:
     return h.hexdigest()[:16]
 
 
-def compute_phash_variants(image_path: Path, hash_size: int = 8) -> List[str]:
-    """Return a list of pHash values including simple geometric variants."""
+def compute_phash_variants(
+    image_path: Path,
+    hash_size: int = 8,
+    scales: Tuple[float, ...] = MULTISCALE_LEVELS,
+) -> List[str]:
+    """Return a list of pHash values with multi-scale + orientation variants."""
     if not PIL_AVAILABLE or imagehash is None:
         return [compute_phash(image_path, hash_size=hash_size)]
     variants: List[str] = []
     with Image.open(str(image_path)) as img:
         base = img.convert("RGB")
-        transforms = [
-            base,
-            base.rotate(90, expand=True),
-            base.rotate(180, expand=True),
-            base.rotate(270, expand=True),
-            base.transpose(Image.FLIP_LEFT_RIGHT),
-            base.transpose(Image.FLIP_TOP_BOTTOM),
-        ]
+        transforms: List[Image.Image] = []
+        for scale in scales:
+            if scale <= 0:
+                continue
+            if scale == 1.0:
+                scaled = base
+            else:
+                w = max(1, int(base.width * scale))
+                h = max(1, int(base.height * scale))
+                scaled = base.resize((w, h))
+            transforms.extend(
+                [
+                    scaled,
+                    scaled.rotate(90, expand=True),
+                    scaled.rotate(180, expand=True),
+                    scaled.rotate(270, expand=True),
+                    scaled.transpose(Image.FLIP_LEFT_RIGHT),
+                    scaled.transpose(Image.FLIP_TOP_BOTTOM),
+                ]
+            )
         for im in transforms:
             variants.append(imagehash.phash(im, hash_size=hash_size).__str__())
     # deduplicate while preserving order
@@ -146,6 +175,24 @@ def _load_embedder():
     return _EMBED_MODEL, _EMBED_TRANSFORM
 
 
+def _load_clip_model():
+    global _CLIP_MODEL, _CLIP_PREPROCESS
+    if not CLIP_AVAILABLE or not TORCH_AVAILABLE:
+        return None, None
+    if _CLIP_MODEL is not None and _CLIP_PREPROCESS is not None:
+        return _CLIP_MODEL, _CLIP_PREPROCESS
+    try:
+        device = "cpu"
+        model, preprocess = clip.load("ViT-B/32", device=device)
+        model.eval()
+        _CLIP_MODEL = model
+        _CLIP_PREPROCESS = preprocess
+    except Exception:
+        _CLIP_MODEL = None
+        _CLIP_PREPROCESS = None
+    return _CLIP_MODEL, _CLIP_PREPROCESS
+
+
 def _fallback_embedding(image_path: Path, size: int = 64) -> Optional[Any]:
     if np is None or not PIL_AVAILABLE or Image is None:
         return None
@@ -166,7 +213,11 @@ def _fallback_embedding(image_path: Path, size: int = 64) -> Optional[Any]:
 
 
 def compute_embedding(image_path: Path) -> Optional[Any]:
-    """Compute a ResNet18 embedding (falls back to RGB thumbnail)."""
+    """Compute fused embeddings (ResNet18 + optional CLIP) for ANN recall."""
+    if np is None:
+        return _fallback_embedding(image_path)
+    embeddings: List[np.ndarray] = []
+
     model, transform = _load_embedder()
     if model is not None and transform is not None and Image is not None:
         try:
@@ -177,38 +228,87 @@ def compute_embedding(image_path: Path) -> Optional[Any]:
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
-            return vec.astype("float32")
+            embeddings.append(vec.astype("float32"))
         except Exception:
             pass
+
+    clip_model, clip_preprocess = _load_clip_model()
+    if clip_model is not None and clip_preprocess is not None:
+        try:
+            img = Image.open(str(image_path)).convert("RGB")
+            tensor = clip_preprocess(img).unsqueeze(0)
+            with torch.no_grad():
+                vec = clip_model.encode_image(tensor.to("cpu")).squeeze(0).cpu().numpy()
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            embeddings.append(vec.astype("float32"))
+        except Exception:
+            pass
+
+    if embeddings:
+        try:
+            fused = np.concatenate(embeddings)
+            norm = np.linalg.norm(fused)
+            if norm > 0:
+                fused = fused / norm
+            return fused.astype("float32")
+        except Exception:
+            pass
+
     return _fallback_embedding(image_path)
 
 
-def compute_tile_hashes(image_path: Path, grid: int = 8, hash_size: int = 8) -> List[Tuple[str, Tuple[int, int, int, int]]]:
-    """Split image into grid x grid tiles and compute pHash per tile.
-
-    Returns list of (hex_hash, (x0,y0,x1,y1)).
-    """
-    tiles = []
+def compute_tile_hashes(
+    image_path: Path,
+    grid: int = 8,
+    hash_size: int = 8,
+    scales: Tuple[float, ...] = MULTISCALE_LEVELS,
+) -> List[Dict[str, Any]]:
+    """Split image into grid x grid tiles across multiple scales and compute pHash per tile."""
+    tiles: List[Dict[str, Any]] = []
     if not PIL_AVAILABLE or Image is None or imagehash is None:
-        # Fallback: produce one tile using full-image phash fallback
         ph = compute_phash(image_path, hash_size=hash_size)
-        tiles.append((ph, (0, 0, 0, 0)))
+        tiles.append({"hash": ph, "bbox": (0, 0, 0, 0), "scale": 1.0})
         return tiles
-    img = Image.open(str(image_path)).convert("RGB")
-    w, h = img.size
-    gx = grid
-    gy = grid
-    tw = max(1, w // gx)
-    th = max(1, h // gy)
-    for yi in range(gy):
-        for xi in range(gx):
-            x0 = xi * tw
-            y0 = yi * th
-            x1 = x0 + tw if xi < gx - 1 else w
-            y1 = y0 + th if yi < gy - 1 else h
-            crop = img.crop((x0, y0, x1, y1))
-            ph = imagehash.phash(crop, hash_size=hash_size)
-            tiles.append((ph.__str__(), (x0, y0, x1, y1)))
+
+    base = Image.open(str(image_path)).convert("RGB")
+    w_base, h_base = base.size
+    for scale in scales:
+        if scale <= 0:
+            continue
+        if scale == 1.0:
+            img = base
+            w, h = w_base, h_base
+        else:
+            w = max(1, int(w_base * scale))
+            h = max(1, int(h_base * scale))
+            img = base.resize((w, h))
+        if w == 0 or h == 0:
+            continue
+
+        tile_w = max(1, w // grid)
+        tile_h = max(1, h // grid)
+        for yi in range(grid):
+            for xi in range(grid):
+                x0 = xi * tile_w
+                y0 = yi * tile_h
+                x1 = x0 + tile_w if xi < grid - 1 else w
+                y1 = y0 + tile_h if yi < grid - 1 else h
+                crop = img.crop((x0, y0, x1, y1))
+                ph = imagehash.phash(crop, hash_size=hash_size)
+                inv = 1.0 / scale if scale != 0 else 1.0
+                bbox = (
+                    int(x0 * inv),
+                    int(y0 * inv),
+                    int(x1 * inv),
+                    int(y1 * inv),
+                )
+                tiles.append({
+                    "hash": ph.__str__(),
+                    "bbox": bbox,
+                    "scale": float(scale),
+                })
     return tiles
 
 

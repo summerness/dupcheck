@@ -15,12 +15,12 @@ DupCheck targets a recurring fraud scenario in repair claims: contractors upload
 The implementation is pure Python and depends only on widely available imaging libraries, which keeps integration with existing intake or back-office pipelines straightforward.
 
 ### Detection flow
-1. **Index build** – gallery images are converted to multiple perceptual hashes (original, rotations, flips), tile hashes, cached ORB descriptors, and optional ResNet-18 embeddings so geometric tweaks and coarse semantics remain discoverable.
-2. **Candidate recall** – a new upload is matched through pHash buckets, tile voting, and optional FAISS (ResNet-18) vector search; if necessary, orientation-aware ORB matching pulls in additional suspects.
+1. **Index build** – gallery images are converted to multi-orientation pHash, multi-scale tile hashes, cached ORB descriptors, and optional ResNet-18 / CLIP embeddings so geometric tweaks and coarse semantics remain discoverable.
+2. **Candidate recall** – a new upload is matched through pHash buckets, tile voting, and optional FAISS (ResNet-18/CLIP) vector search; if necessary, orientation-aware ORB matching pulls in additional suspects.
 3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch promotes the match to `exact_patch`.
 4. **Reporting** – matches are recorded in `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
 
-> **Scaling tip:** For very large galleries or cluster deployments, replace the in-process FAISS index with an external vector database (e.g., Milvus, Qdrant, Pinecone). A natural hook is the `duplicate_check/indexer.py::build_index` / `load_index_from_db` functions—swap the FAISS `IndexFlatIP` creation for remote writes, and query that service inside `matcher.recall_candidates` before running ORB reranking.
+> **Scaling tip:** Set `DUPC_VECTOR_INDEX=ivf_pq` or `hnsw` to switch the built-in FAISS index; for very large galleries or cluster deployments, replace the in-process FAISS index with an external vector database (e.g., Milvus, Qdrant, Pinecone). A natural hook is the `duplicate_check/indexer.py::build_index` / `load_index_from_db` functions—swap the FAISS creation for remote writes, and query that service inside `matcher.recall_candidates` before running ORB reranking.
 
 ### Project layout
 - `duplicate_check/` — core modules (`features`, `indexer`, `matcher`, `report`).
@@ -38,6 +38,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Optional extras: install `faiss-cpu` (for ANN recall) and either `open-clip-torch` or `clip` if you want CLIP-ViT embeddings in addition to ResNet.
 
 ### Quick start
 1. Generate the demo dataset:
@@ -103,10 +105,12 @@ DupCheck 聚焦理赔审核中的骗赔套路：重复提交、裁剪拼接、�
 项目依赖常见的 Python 图像 / 深度学习库，可嵌入现有的上传或后台审核流程。
 
 ### 检测流程
-1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、块哈希、缓存 ORB 关键点，并可生成 ResNet-18 嵌入，确保几何和粗语义变化也能被召回。
-2. **召回候选**：新图片通过 pHash/块哈希匹配，并可结合基于 ResNet-18 的 FAISS 向量检索；如有需要再执行多姿态 ORB 匹配，把旋转、翻转的嫌疑图拉入候选集。
+1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、多尺度块哈希、缓存 ORB 关键点，并可生成 ResNet-18 / CLIP 嵌入，确保几何和粗语义变化也能被召回。
+2. **召回候选**：新图片通过 pHash/块哈希匹配，并可结合基于 ResNet-18/CLIP 的 FAISS 向量检索；如有需要再执行多姿态 ORB 匹配，把旋转、翻转的嫌疑图拉入候选集。
 3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，若单应关系稳定，则在对应区域做 NCC，判断是否为 `exact_patch`。
 4. **结果输出**：检测结论写入 `dup_report.csv`，命令行可生成对照证据图，辅助人工审核。
+
+> **扩展建议**：可通过设置环境变量 `DUPC_VECTOR_INDEX=ivf_pq` 或 `hnsw` 切换内置 FAISS 索引；若图库规模巨大或需集群部署，可在 `duplicate_check/indexer.py` / `load_index_from_db` 中替换 FAISS，为 Milvus、Qdrant、Pinecone 等外部向量库写入，并在 `matcher.recall_candidates` 中调用该服务。
 
 ### 目录结构
 - `duplicate_check/` —— 核心模块（`features`、`indexer`、`matcher`、`report`）。
@@ -124,6 +128,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+可选依赖：`faiss-cpu`（向量召回），以及 `open-clip-torch` 或 `clip`（启用 CLIP-ViT 向量）。
 
 ### 快速体验
 1. 生成示例数据集：
