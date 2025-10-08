@@ -1,9 +1,9 @@
 # DupCheck — Duplicate & Tamper Detection
 
 ## Overview
-DupCheck addresses a recurring issue in repair-claim workflows: contractors reuse or patch previous photos to obtain duplicate reimbursements. The tool analyses an upload against a curated gallery and flags exact copies, tight crops, rotations, flips, and lightly edited versions.
+DupCheck solves broad “duplicate / tamper detection” needs: It works in insurance claim review, content moderation, e-commerce authenticity checks, and copyright protection. The project originally started as a safeguard against third-party repair contractors reusing photos to claim duplicate reimbursements, and has since evolved into a general-purpose toolkit. Uploads are compared against a reference gallery to flag exact copies, crops, rotations, flips, and lightly edited variants, producing reviewer-friendly evidence.
 
-The pipeline is entirely Python based and keeps dependencies minimal so it can be embedded in existing intake or review systems.
+The pipeline is pure Python with minimal dependencies, making it easy to embed into intake pipelines or back-office review systems.
 
 ## Detection flow
 1. **Index build** – each gallery image is converted to multiple perceptual hashes (original, rotations, flips), multi-scale tile hashes, cached ORB descriptors, and optional ResNet-18 / CLIP embeddings to support geometric and coarse semantic changes.
