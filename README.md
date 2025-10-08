@@ -66,6 +66,14 @@ Optional extras: install `faiss-cpu` (for ANN recall) and either `open-clip-torc
      --orb_inliers_thresh 6 \
      --ncc_thresh 0.85
    ```
+5. (Optional) Run a threshold grid search to tune the pipeline:
+   ```bash
+   python tools/tune_thresholds.py \
+     --labels data/synth_labels.csv \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --out_dir reports/tune_out
+   ```
 
 Drop `--rebuild_index` to reuse a cached index. Tune `--phash_thresh`, `--orb_inliers_thresh`, and `--ncc_thresh` to explore different precision/recall tradeoffs.
 
@@ -109,6 +117,7 @@ DupCheck 聚焦理赔审核中的骗赔套路：重复提交、裁剪拼接、�
 2. **召回候选**：新图片通过 pHash/块哈希匹配，并可结合基于 ResNet-18/CLIP 的 FAISS 向量检索；如有需要再执行多姿态 ORB 匹配，把旋转、翻转的嫌疑图拉入候选集。
 3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，若单应关系稳定，则在对应区域做 NCC，判断是否为 `exact_patch`。
 4. **结果输出**：检测结论写入 `dup_report.csv`，命令行可生成对照证据图，辅助人工审核。
+5. **阈值调优**：可选地运行 `tools/tune_thresholds.py` 做网格搜索，针对不同场景选择更合适的 `phash/ORB/NCC` 参数。
 
 > **扩展建议**：可通过设置环境变量 `DUPC_VECTOR_INDEX=ivf_pq` 或 `hnsw` 切换内置 FAISS 索引；若图库规模巨大或需集群部署，可在 `duplicate_check/indexer.py` / `load_index_from_db` 中替换 FAISS，为 Milvus、Qdrant、Pinecone 等外部向量库写入，并在 `matcher.recall_candidates` 中调用该服务。
 

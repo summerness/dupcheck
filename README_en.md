@@ -10,6 +10,7 @@ The pipeline is entirely Python based and keeps dependencies minimal so it can b
 2. **Candidate recall** – a new upload is compared with the index via pHash buckets, tile voting, and optional FAISS (ResNet-18/CLIP) vector search; if needed, multi-orientation ORB matching pulls in additional suspects.
 3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch upgrades matches to `exact_patch`.
 4. **Reporting** – results are written to `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
+5. **Threshold tuning** – optionally run `tools/tune_thresholds.py` to grid-search `phash/ORB/NCC` thresholds and pick the best configuration for your data.
 
 > **Scaling tip:** Set `DUPC_VECTOR_INDEX=ivf_pq` or `hnsw` to switch the built-in FAISS index; for even larger deployments, replace the FAISS block in `duplicate_check/indexer.py` / `load_index_from_db` with writes to Milvus, Qdrant, Pinecone, etc., and query that service from `matcher.recall_candidates` before ORB reranking.
 
@@ -56,6 +57,14 @@ Optional extras: install `faiss-cpu` (for ANN recall) and either `open-clip-torc
      --phash_thresh 16 \
      --orb_inliers_thresh 6 \
      --ncc_thresh 0.85
+   ```
+5. (Optional) Launch a grid search over thresholds:
+   ```bash
+   python tools/tune_thresholds.py \
+     --labels data/synth_labels.csv \
+     --db_dir data/synth_db \
+     --input_dir data/synth_new \
+     --out_dir reports/tune_out
    ```
 
 To reuse an existing index, drop the `--rebuild_index` flag. Tweak `--phash_thresh`, `--orb_inliers_thresh`, and `--ncc_thresh` to experiment with precision/recall.

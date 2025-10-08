@@ -3,6 +3,10 @@ numpy
 Pillow
 imagehash
 faiss-cpu
+torch
+torchvision
+# Optional CLIP support (install from source if wheel unavailable)
+clip-anytorch
 tqdm
 matplotlib
 piexif
