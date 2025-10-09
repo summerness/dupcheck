@@ -17,7 +17,7 @@ The implementation is pure Python and depends only on widely available imaging l
 ### Detection flow
 1. **Index build** – gallery images are converted to multi-orientation pHash, multi-scale tile hashes, cached ORB descriptors, and optional ResNet-18 / CLIP embeddings so geometric tweaks and coarse semantics remain discoverable.
 2. **Candidate recall** – a new upload is matched through pHash buckets, tile voting, and optional FAISS (ResNet-18/CLIP) vector search; if necessary, orientation-aware ORB matching pulls in additional suspects.
-3. **Verification** – the best orientation pair runs ORB + RANSAC. When the homography is reliable, NCC on the corresponding patch promotes the match to `exact_patch`.
+3. **Verification** – the best orientation pair runs ORB + RANSAC. We warp the database image via the estimated homography, crop a small ROI around the inlier hull, and run ZNCC on that aligned patch; high correlation promotes the match to `exact_patch`.
 4. **Reporting** – matches are recorded in `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
 
 > **Scaling tip:** Set `DUPC_VECTOR_INDEX=ivf_pq` or `hnsw` to switch the built-in FAISS index; for very large galleries or cluster deployments, replace the in-process FAISS index with an external vector database (e.g., Milvus, Qdrant, Pinecone). A natural hook is the `duplicate_check/indexer.py::build_index` / `load_index_from_db` functions—swap the FAISS creation for remote writes, and query that service inside `matcher.recall_candidates` before running ORB reranking.
@@ -66,7 +66,9 @@ Optional extras: install `faiss-cpu` (for ANN recall) and either `open-clip-torc
      --labels data/synth_labels.csv \
      --phash_thresh 16 \
      --orb_inliers_thresh 6 \
-     --ncc_thresh 0.85
+     --ncc_thresh 0.88 \
+     --roi_margin_ratio 0.12 \
+     --max_roi_matches 60
    ```
 5. (Optional) Run a threshold grid search to tune the pipeline:
    ```bash
@@ -121,7 +123,7 @@ DupCheck 面向广义的“图库去重 / 篡改检测”场景：不仅可用�
 ### 检测流程
 1. **构建索引**：对图库图片计算多姿态 pHash（原图、旋转、翻转）、多尺度块哈希、缓存 ORB 关键点，并可生成 ResNet-18 / CLIP 嵌入，确保几何和粗语义变化也能被召回。
 2. **召回候选**：新图片通过 pHash/块哈希匹配，并可结合基于 ResNet-18/CLIP 的 FAISS 向量检索；如有需要再执行多姿态 ORB 匹配，把旋转、翻转的嫌疑图拉入候选集。
-3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，若单应关系稳定，则在对应区域做 NCC，判断是否为 `exact_patch`。
+3. **精排验证**：对最佳姿态组合执行 ORB + RANSAC，将数据库图像按单应变换对齐到查询图坐标系后，在内点凸包附近裁剪 ROI，计算对齐区域的 ZNCC，判定是否为 `exact_patch`。
 4. **结果输出**：检测结论写入 `dup_report.csv`，命令行可生成对照证据图，辅助人工审核。
 5. **阈值调优**：可选地运行 `tools/tune_thresholds.py` 做网格搜索，针对不同场景选择更合适的 `phash/ORB/NCC` 参数。
 
@@ -169,7 +171,9 @@ pip install -r requirements.txt
      --labels data/synth_labels.csv \
      --phash_thresh 16 \
      --orb_inliers_thresh 6 \
-     --ncc_thresh 0.85
+     --ncc_thresh 0.88 \
+     --roi_margin_ratio 0.12 \
+     --max_roi_matches 60
    ```
 
 如需复用已有索引，可省略 `--rebuild_index`。可通过 `--phash_thresh`、`--orb_inliers_thresh`、`--ncc_thresh` 调整查准率与召回率之间的权衡。

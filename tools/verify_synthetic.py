@@ -51,6 +51,8 @@ def evaluate(
     orb_inliers_thresh: int,
     ncc_thresh: float,
     vector_score_thresh: float,
+    roi_margin_ratio: float,
+    max_roi_matches: int,
 ) -> Dict[str, object]:
     labels = load_labels(labels_path)
     idx = indexer.build_index(db_dir)
@@ -80,6 +82,8 @@ def evaluate(
             idx,
             orb_inliers_thresh=orb_inliers_thresh,
             ncc_thresh=ncc_thresh,
+            roi_margin_ratio=roi_margin_ratio,
+            max_roi_matches=max_roi_matches,
         )
 
         meta = labels.get(img_path.name, {"matched_image": "", "label": "unique"})
@@ -158,6 +162,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--orb_inliers_thresh", type=int, default=25)
     p.add_argument("--ncc_thresh", type=float, default=0.92)
     p.add_argument("--vector_score_thresh", type=float, default=0.0)
+    p.add_argument("--roi_margin_ratio", type=float, default=0.12)
+    p.add_argument("--max_roi_matches", type=int, default=60)
     return p.parse_args()
 
 
@@ -179,6 +185,8 @@ def main() -> None:
         orb_inliers_thresh=args.orb_inliers_thresh,
         ncc_thresh=args.ncc_thresh,
         vector_score_thresh=args.vector_score_thresh,
+        roi_margin_ratio=args.roi_margin_ratio,
+        max_roi_matches=args.max_roi_matches,
     )
     print(format_summary(stats))
 

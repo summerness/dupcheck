@@ -88,6 +88,88 @@ def _variant_orientation(name: Optional[str]) -> str:
     return parts[1] if len(parts) == 2 else parts[0]
 
 
+def _filter_inlier_matches(matches: List[Any], mask: Optional[List[int]]) -> List[Any]:
+    if not matches:
+        return []
+    if not mask:
+        return matches
+    return [m for m, keep in zip(matches, mask) if keep]
+
+
+def _limit_matches(matches: List[Any], max_count: int) -> List[Any]:
+    if max_count <= 0 or not matches:
+        return matches
+    if len(matches) <= max_count:
+        return matches
+    stride = max(1, len(matches) // max_count)
+    limited = matches[::stride]
+    if len(limited) > max_count:
+        limited = limited[:max_count]
+    if not limited:
+        return matches[:max_count]
+    return limited
+
+
+def _compute_roi_from_matches(
+    matches: List[Any],
+    keypoints: List[Any],
+    image_path: Path,
+    margin_ratio: float = 0.15,
+    *,
+    index_attr: str = "trainIdx",
+    max_fraction: float = 0.6,
+    min_size: int = 16,
+) -> Optional[Tuple[int, int, int, int]]:
+    if cv2 is None or not matches or not keypoints:
+        return None
+    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    xs: List[float] = []
+    ys: List[float] = []
+    for m in matches:
+        idx = getattr(m, index_attr, None)
+        if idx is None or idx >= len(keypoints):
+            continue
+        pt = keypoints[idx].pt
+        xs.append(float(pt[0]))
+        ys.append(float(pt[1]))
+    if len(xs) < 2 or len(ys) < 2:
+        return None
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    width = max_x - min_x
+    height = max_y - min_y
+    if width <= 0 or height <= 0:
+        return None
+    margin_x = max(10.0, width * margin_ratio)
+    margin_y = max(10.0, height * margin_ratio)
+    x0 = max(0, int(min_x - margin_x))
+    y0 = max(0, int(min_y - margin_y))
+    x1 = min(w, int(max_x + margin_x))
+    y1 = min(h, int(max_y + margin_y))
+    roi_w = x1 - x0
+    roi_h = y1 - y0
+    if roi_w <= 0 or roi_h <= 0:
+        return None
+    max_w = max(min_size, int(w * max_fraction))
+    max_h = max(min_size, int(h * max_fraction))
+    if roi_w > max_w:
+        cx = (x0 + x1) / 2.0
+        half = max_w / 2.0
+        x0 = max(0, int(round(cx - half)))
+        x1 = min(w, int(round(cx + half)))
+    if roi_h > max_h:
+        cy = (y0 + y1) / 2.0
+        half = max_h / 2.0
+        y0 = max(0, int(round(cy - half)))
+        y1 = min(h, int(round(cy + half)))
+    if x1 - x0 <= 0 or y1 - y0 <= 0:
+        return None
+    return (x0, y0, x1, y1)
+
+
 def _compute_feature_variants_for_path(
     path: Path,
     cache: Dict[str, List[Dict[str, Any]]] | None = None,
@@ -389,7 +471,14 @@ def _orb_ransac_inliers(kps1, desc1, kps2, desc2, ratio=0.75, ransac_thresh=5.0)
     return inliers, inlier_ratio, mask.ravel().tolist(), H, good
 
 
-def _ncc_peak(img_query_path: Path, db_path: Path, bbox: Tuple[int, int, int, int]) -> float:
+def _ncc_peak(
+    img_query_path: Path,
+    db_path: Path,
+    bbox_query: Tuple[int, int, int, int],
+    bbox_db: Tuple[int, int, int, int],
+    *,
+    min_size: int = 16,
+) -> float:
     """Compute normalized cross correlation between query and db patch.
 
     For simplicity, we load images via OpenCV, extract the db bbox, resize query to same
@@ -401,14 +490,20 @@ def _ncc_peak(img_query_path: Path, db_path: Path, bbox: Tuple[int, int, int, in
     d = cv2.imread(str(db_path), cv2.IMREAD_COLOR)
     if q is None or d is None:
         return 0.0
-    x0, y0, x1, y1 = bbox
-    patch = d[y0:y1, x0:x1]
-    if patch.size == 0:
+    qx0, qy0, qx1, qy1 = bbox_query
+    dx0, dy0, dx1, dy1 = bbox_db
+    q_patch = q[qy0:qy1, qx0:qx1]
+    d_patch = d[dy0:dy1, dx0:dx1]
+    if q_patch.size == 0 or d_patch.size == 0:
         return 0.0
-    # Resize query to patch size
-    q_resized = cv2.resize(q, (patch.shape[1], patch.shape[0]))
+    if q_patch.shape[0] < min_size or q_patch.shape[1] < min_size:
+        return 0.0
+    if d_patch.shape[0] < min_size or d_patch.shape[1] < min_size:
+        return 0.0
+    # Resize query ROI to the database ROI size for comparison
+    q_resized = cv2.resize(q_patch, (d_patch.shape[1], d_patch.shape[0]))
     qf = cv2.cvtColor(q_resized, cv2.COLOR_BGR2GRAY)
-    pf = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    pf = cv2.cvtColor(d_patch, cv2.COLOR_BGR2GRAY)
     res = cv2.matchTemplate(pf, qf, cv2.TM_CCOEFF_NORMED)
     return float(res.max()) if res.size else 0.0
 
@@ -420,6 +515,8 @@ def rerank_and_verify(
     orb_inliers_thresh: int = 25,
     orb_inlier_ratio: float = 0.25,
     ncc_thresh: float = 0.92,
+    roi_margin_ratio: float = 0.12,
+    max_roi_matches: int = 60,
 ) -> List[Dict[str, Any]]:
     """For each candidate, run ORB matching + RANSAC and NCC to generate final decision rows."""
     rows: List[Dict[str, Any]] = []
@@ -479,6 +576,7 @@ def rerank_and_verify(
                     "inliers": inliers,
                     "inlier_ratio": inlier_ratio,
                     "matches": good_matches,
+                    "mask": mask,
                 }
 
         has_descriptors = has_query_orb and has_db_orb
@@ -514,26 +612,38 @@ def rerank_and_verify(
         ):
             label = "partial_duplicate"
             score = max(score, min(0.99, 0.5 + best["inlier_ratio"]))
-            tiles = db_rec.get("tiles", [])
+            matches_for_roi = _filter_inlier_matches(best.get("matches") or [], best.get("mask"))
+            matches_for_roi = _limit_matches(matches_for_roi, max_roi_matches)
             if (
-                tiles
+                matches_for_roi
+                and len(matches_for_roi) >= 4
                 and best.get("algo_q") == "orb"
                 and best.get("algo_d") == "orb"
                 and _variant_orientation(best.get("q_name")) == "rot0"
                 and _variant_orientation(best.get("d_name")) == "rot0"
             ):
-                tile_entry = tiles[len(tiles) // 2]
-                if isinstance(tile_entry, dict):
-                    bbox = tile_entry.get("bbox", (0, 0, 0, 0))
-                else:
-                    bbox = tile_entry[1]
-                try:
-                    ncc_peak = _ncc_peak(input_path, db_path, bbox)
-                except Exception:
-                    ncc_peak = 0.0
-                if ncc_peak >= ncc_thresh:
-                    label = "exact_patch"
-                    score = 0.99
+                q_bbox = _compute_roi_from_matches(
+                    matches_for_roi,
+                    best["q"]["kps"],
+                    input_path,
+                    margin_ratio=roi_margin_ratio,
+                    index_attr="queryIdx",
+                )
+                d_bbox = _compute_roi_from_matches(
+                    matches_for_roi,
+                    best["d"]["kps"],
+                    db_path,
+                    margin_ratio=roi_margin_ratio,
+                    index_attr="trainIdx",
+                )
+                if q_bbox and d_bbox:
+                    try:
+                        ncc_peak = _ncc_peak(input_path, db_path, q_bbox, d_bbox)
+                    except Exception:
+                        ncc_peak = 0.0
+                    if ncc_peak >= ncc_thresh:
+                        label = "exact_patch"
+                        score = 0.99
         else:
             continue
 
