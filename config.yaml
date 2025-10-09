@@ -6,4 +6,6 @@ orb_max_features: 2000
 orb_inliers_thresh: 25
 orb_inlier_ratio: 0.25
 ncc_thresh: 0.92
+roi_margin_ratio: 0.12
+max_roi_matches: 60
 topk_recall: 50

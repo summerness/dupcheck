@@ -5,7 +5,7 @@ Usage:
 
 labels.csv should contain columns: new_image, matched_image, label (unique/partial_duplicate/exact_patch)
 
-This script sweeps phash_thresh, orb_inliers_thresh, ncc_thresh and reports simple match rate vs ground truth.
+This script sweeps phash_thresh, orb_inliers_thresh, ncc_thresh and reports simple match rate vs ground truth. NCC now operates on a warped ROI; use --roi_margin_ratio / --max_roi_matches to keep tuning aligned.
 
 阈值调优脚本。
 
@@ -14,7 +14,7 @@ This script sweeps phash_thresh, orb_inliers_thresh, ncc_thresh and reports simp
 
 labels.csv 应包含列：new_image, matched_image, label（unique/partial_duplicate/exact_patch）
 
-本脚本对 phash_thresh、orb_inliers_thresh、ncc_thresh 做网格搜索，并报告与标注的 TP/FP/FN 统计。
+本脚本对 phash_thresh、orb_inliers_thresh、ncc_thresh 做网格搜索，并报告与标注的 TP/FP/FN 统计。NCC 已改为基于单应 ROI 的对齐互相关，可通过 --roi_margin_ratio / --max_roi_matches 调整 ROI 设定。
 """
 import sys
 import argparse
@@ -35,6 +35,8 @@ def parse_args():
     p.add_argument("--db_dir", required=True)
     p.add_argument("--input_dir", required=True)
     p.add_argument("--out_dir", required=True)
+    p.add_argument("--roi_margin_ratio", type=float, default=0.12)
+    p.add_argument("--max_roi_matches", type=int, default=60)
     return p.parse_args()
 
 
@@ -71,7 +73,15 @@ def main():
                         continue
                     feats = features.compute_features(p)
                     cands = matcher.recall_candidates(feats, idx, phash_thresh=ph)
-                    rows = matcher.rerank_and_verify(p, cands, idx, orb_inliers_thresh=orb_th, ncc_thresh=ncc)
+                    rows = matcher.rerank_and_verify(
+                        p,
+                        cands,
+                        idx,
+                        orb_inliers_thresh=orb_th,
+                        ncc_thresh=ncc,
+                        roi_margin_ratio=args.roi_margin_ratio,
+                        max_roi_matches=args.max_roi_matches,
+                    )
                     predicted = rows[0]['matched_image'] if rows else None
                     gt = labels.get(p.name, {}).get('matched_image')
                     if gt and predicted == gt:
