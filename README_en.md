@@ -13,13 +13,14 @@ The pipeline is pure Python with minimal dependencies, making it easy to embed i
 5. **Threshold tuning** – optionally run `tools/tune_thresholds.py` to grid-search `phash/ORB/NCC` thresholds and pick the best configuration for your data.
 
 > **Scaling tip:** Set `DUPC_VECTOR_INDEX=ivf_pq` or `hnsw` to switch the built-in FAISS index; for even larger deployments, replace the FAISS block in `duplicate_check/indexer.py` / `load_index_from_db` with writes to Milvus, Qdrant, Pinecone, etc., and query that service from `matcher.recall_candidates` before ORB reranking.
+> **Performance tip:** Tune `DUPC_TILE_SCALES` (e.g., `1.0,0.6`) and `DUPC_TILE_GRID` to trade multi-scale robustness for runtime when processing massive galleries.
 
 ## Project layout
 - `duplicate_check/` — core library modules (`features`, `indexer`, `matcher`, `report`).
 - `dupcheck_cli.py` — main CLI wrapper supporting in-memory or SQLite indices.
 - `duplicate_check.py` — minimal entry point kept for backwards compatibility.
 - `tools/` — utilities for synthetic data generation and threshold tuning.
-- `tests/` & `run_smoke.py` — quick smoke coverage for the end-to-end flow.
+- `tests/` — quick test.
 - `data/` — sample synthetic dataset used by the documentation examples.
 
 ## Requirements
@@ -93,3 +94,7 @@ python tools/tune_thresholds.py \
 ```
 
 The script writes `tune_results.csv` with TP/FP/FN counts for each parameter combo, making it easy to lock in settings for your own data.
+
+## License
+
+This project is released under the [MIT License](LICENSE).

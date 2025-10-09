@@ -66,10 +66,27 @@ _EMBED_MODEL = None
 _EMBED_TRANSFORM = None
 _CLIP_MODEL = None
 _CLIP_PREPROCESS = None
-_CLIP_MODEL = None
-_CLIP_PREPROCESS = None
 
-MULTISCALE_LEVELS: Tuple[float, ...] = (1.0, 0.75, 0.5)
+def _parse_scales(env_name: str, default: Tuple[float, ...]) -> Tuple[float, ...]:
+    raw = os.getenv(env_name)
+    if not raw:
+        return default
+    values: List[float] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            val = float(part)
+        except ValueError:
+            continue
+        if val > 0:
+            values.append(val)
+    return tuple(values) if values else default
+
+
+MULTISCALE_LEVELS: Tuple[float, ...] = _parse_scales("DUPC_TILE_SCALES", (1.0, 0.75))
+DEFAULT_TILE_GRID = max(1, int(os.getenv("DUPC_TILE_GRID", "8")))
 
 @dataclass
 class ImageFeatures:
@@ -77,6 +94,7 @@ class ImageFeatures:
     orb: Dict[str, Any]
     size: Tuple[int, int]
     embedding: Optional[Any] = None
+    tiles: Optional[List[Dict[str, Any]]] = None
 
 
 def compute_phash(image_path: Path, hash_size: int = 8) -> str:
@@ -261,7 +279,7 @@ def compute_embedding(image_path: Path) -> Optional[Any]:
 
 def compute_tile_hashes(
     image_path: Path,
-    grid: int = 8,
+    grid: int = DEFAULT_TILE_GRID,
     hash_size: int = 8,
     scales: Tuple[float, ...] = MULTISCALE_LEVELS,
 ) -> List[Dict[str, Any]]:
@@ -330,7 +348,7 @@ def compute_orb_descriptors(image_path: Path, max_features: int = 2000) -> Dict:
     return {"kps": kps, "descs": descs}
 
 
-def compute_features(image_path: Path, orb_max_features: int = 2000, tile_grid: int = 8) -> ImageFeatures:
+def compute_features(image_path: Path, orb_max_features: int = 2000, tile_grid: int = DEFAULT_TILE_GRID) -> ImageFeatures:
     ph = compute_phash(image_path)
     orb = {}
     try:
@@ -349,12 +367,14 @@ def compute_features(image_path: Path, orb_max_features: int = 2000, tile_grid: 
         embedding = compute_embedding(image_path)
     except Exception:
         embedding = None
+    try:
+        tiles = compute_tile_hashes(image_path, grid=tile_grid)
+    except Exception:
+        tiles = []
     feats = ImageFeatures(phash=ph, orb=orb, size=size, embedding=embedding)
-    # attach source path for downstream tile recall
-    # 将源路径附加到特征对象，以便后续 tile 召回使用
+    feats.tiles = tiles
     try:
         feats._path = str(image_path)
     except Exception:
         pass
-    feats.embedding = embedding
     return feats

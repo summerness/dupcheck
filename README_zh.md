@@ -13,13 +13,14 @@ DupCheck 面向广义的“图库去重 / 篡改检测”需求：不仅适用�
 5. **阈值调优**：可选运行 `tools/tune_thresholds.py` 做网格搜索，为不同业务场景选取合适的 pHash/ORB/NCC 阈值组合。
 
 > **扩展建议**：若图库规模巨大或需集群部署，可在 `duplicate_check/indexer.py` / `load_index_from_db` 中替换内置 FAISS 索引，改写为向 Milvus、Qdrant、Pinecone 等外部向量数据库写入，再在 `matcher.recall_candidates` 中改为查询该服务。
+> **性能提示**：可调整 `DUPC_TILE_SCALES`（如 `1.0,0.6`）与 `DUPC_TILE_GRID`，在多尺度鲁棒性与运行速度之间取得平衡。
 
 ## 目录结构
 - `duplicate_check/` —— 核心库模块（`features`、`indexer`、`matcher`、`report`）。
 - `dupcheck_cli.py` —— 主命令行工具，支持内存索引或 SQLite 索引。
 - `duplicate_check.py` —— 兼容性入口脚本。
 - `tools/` —— 合成数据生成、阈值调参等辅助脚本。
-- `tests/` 与 `run_smoke.py` —— 端到端冒烟验证。
+- `tests/` —— 测试文件夹。
 - `data/` —— 文档示例使用的合成数据集。
 
 ## 环境依赖
@@ -91,4 +92,8 @@ python tools/tune_thresholds.py \
 ```
 
 脚本会输出 `tune_results.csv`，其中包含每组参数的 TP/FP/FN 统计，可据此锁定最适合的数据集配置。
+
+## 许可协议
+
+本项目以 [MIT License](LICENSE) 开源发布。
 ```

@@ -21,13 +21,14 @@ The implementation is pure Python and depends only on widely available imaging l
 4. **Reporting** – matches are recorded in `dup_report.csv`, and the CLI can render side-by-side evidence images for manual review.
 
 > **Scaling tip:** Set `DUPC_VECTOR_INDEX=ivf_pq` or `hnsw` to switch the built-in FAISS index; for very large galleries or cluster deployments, replace the in-process FAISS index with an external vector database (e.g., Milvus, Qdrant, Pinecone). A natural hook is the `duplicate_check/indexer.py::build_index` / `load_index_from_db` functions—swap the FAISS creation for remote writes, and query that service inside `matcher.recall_candidates` before running ORB reranking.
+> **Performance tip:** Adjust `DUPC_TILE_SCALES` (e.g., `1.0,0.6`) and `DUPC_TILE_GRID` to balance multi-scale accuracy against runtime when processing massive galleries.
 
 ### Project layout
 - `duplicate_check/` — core modules (`features`, `indexer`, `matcher`, `report`).
 - `dupcheck_cli.py` — main CLI with in-memory and SQLite index support.
 - `duplicate_check.py` — legacy entrypoint kept for backward compatibility.
 - `tools/` — helpers for synthetic data generation and threshold tuning.
-- `tests/` & `run_smoke.py` — minimal smoke coverage for the end-to-end flow.
+- `tests/` - quick test.
 - `data/` — synthetic dataset used in docs and examples.
 
 ### Requirements
@@ -102,6 +103,10 @@ python tools/tune_thresholds.py \
 
 The script writes `tune_results.csv` containing TP/FP/FN counts for each parameter combo so you can lock in thresholds for your own dataset.
 
+## License
+
+This project is released under the [MIT License](LICENSE).
+
 </details>
 
 <details open>
@@ -126,7 +131,7 @@ DupCheck 面向广义的“图库去重 / 篡改检测”场景：不仅可用�
 - `dupcheck_cli.py` —— 主命令行工具，支持内存或 SQLite 索引。
 - `duplicate_check.py` —— 保留的兼容性入口脚本。
 - `tools/` —— 合成数据生成、阈值调参等辅助脚本。
-- `tests/` 与 `run_smoke.py` —— 端到端冒烟验证。
+- `tests/` —— 测试。
 - `data/` —— 文档示例所用的合成数据集。
 
 ### 环境依赖

@@ -122,14 +122,8 @@ def _compute_feature_variants_for_path(
                 ("rot90", cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)),
                 ("rot180", cv2.rotate(img, cv2.ROTATE_180)),
                 ("rot270", cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+                ("flip0", cv2.flip(img, 1)),
             ]
-            flip = cv2.flip(img, 1)
-            transforms.extend(
-                [
-                    ("flip0", flip),
-                    ("flip90", cv2.rotate(flip, cv2.ROTATE_90_CLOCKWISE)),
-                ]
-            )
 
             for algo, detector in detectors:
                 seen = set()
@@ -194,14 +188,16 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
                 hits[i]["reason"].append(("phash", d))
 
     # tile recall: compute query tile hashes (if possible) and count matches
-    try:
-        from duplicate_check.features import compute_tile_hashes
-        if hasattr(features, "_path") and features._path:
-            q_tiles = compute_tile_hashes(Path(features._path), grid=8)
-        else:
+    q_tiles = getattr(features, "tiles", None)
+    if q_tiles is None:
+        try:
+            from duplicate_check.features import compute_tile_hashes, DEFAULT_TILE_GRID
+
+            if hasattr(features, "_path") and features._path:
+                q_tiles = compute_tile_hashes(Path(features._path), grid=DEFAULT_TILE_GRID)
+                features.tiles = q_tiles
+        except Exception:
             q_tiles = None
-    except Exception:
-        q_tiles = None
 
     if q_tiles:
         tile_counts: Dict[str, int] = {}
@@ -243,7 +239,7 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
                     ids = vector_index.get("ids", [])
                     metric = vector_index.get("metric", "ip")
                     if index_obj is not None and len(ids):
-                        topn = min(max(topk, 10), len(ids))
+                        topn = min(max(topk * 2, 32), len(ids))
                         D, I = index_obj.search(vec, topn)
                         for dist, idx_id in zip(D[0], I[0]):
                             if idx_id < 0 or idx_id >= len(ids):
@@ -271,10 +267,13 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
 
     q_variants: List[Dict[str, Any]] = []
     if query_path is not None:
-        try:
-            q_variants = _compute_feature_variants_for_path(query_path)
-        except Exception:
-            q_variants = []
+        q_variants = getattr(features, "_feature_variants", None) or []
+        if not q_variants:
+            try:
+                q_variants = _compute_feature_variants_for_path(query_path)
+                features._feature_variants = q_variants
+            except Exception:
+                q_variants = []
 
     has_query_orb = any(_has_descriptors(v) for v in q_variants)
 
