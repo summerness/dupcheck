@@ -44,7 +44,8 @@ pip install -r requirements.txt
      --input_dir data/synth_new \
      --out_dir reports \
      --index_db ./index.db \
-     --rebuild_index
+     --rebuild_index \
+     --vector_score_thresh 0.3
    ```
 3. 查看 `reports/dup_report.csv` 以及生成的证据图片。
 4. （可选）对合成标注集进行评估，查看召回差异：

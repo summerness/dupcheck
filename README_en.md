@@ -46,7 +46,8 @@ Optional extras: install `faiss-cpu` (for ANN recall) and either `open-clip-torc
      --input_dir data/synth_new \
      --out_dir reports \
      --index_db ./index.db \
-     --rebuild_index
+     --rebuild_index \
+     --vector_score_thresh 0.3
    ```
 3. Inspect `reports/dup_report.csv` and the generated evidence JPEGs.
 4. (Optional) Benchmark on the labelled synthetic set and review mismatches:

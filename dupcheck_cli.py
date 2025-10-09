@@ -19,6 +19,7 @@ def parse_args():
     p.add_argument("--phash_thresh", type=int, default=10)
     p.add_argument("--orb_inliers_thresh", type=int, default=25)
     p.add_argument("--ncc_thresh", type=float, default=0.92)
+    p.add_argument("--vector_score_thresh", type=float, default=0.0, help="Minimum FAISS similarity to accept a vector candidate")
     return p.parse_args()
 
 
@@ -58,7 +59,13 @@ def main():
             continue
         print(f"Checking {p.name}...")
         feats = features.compute_features(p)
-        cands = matcher.recall_candidates(feats, idx, topk=args.topk, phash_thresh=args.phash_thresh)
+        cands = matcher.recall_candidates(
+            feats,
+            idx,
+            topk=args.topk,
+            phash_thresh=args.phash_thresh,
+            vector_score_thresh=args.vector_score_thresh,
+        )
         rows = matcher.rerank_and_verify(p, cands, idx, orb_inliers_thresh=args.orb_inliers_thresh, ncc_thresh=args.ncc_thresh)
         # generate evidence images for rows
         for r in rows:

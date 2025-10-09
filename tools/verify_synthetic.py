@@ -41,7 +41,17 @@ def load_labels(path: Path) -> Dict[str, Dict[str, str]]:
     return rows
 
 
-def evaluate(db_dir: Path, input_dir: Path, labels_path: Path, *, topk: int, phash_thresh: int, orb_inliers_thresh: int, ncc_thresh: float) -> Dict[str, object]:
+def evaluate(
+    db_dir: Path,
+    input_dir: Path,
+    labels_path: Path,
+    *,
+    topk: int,
+    phash_thresh: int,
+    orb_inliers_thresh: int,
+    ncc_thresh: float,
+    vector_score_thresh: float,
+) -> Dict[str, object]:
     labels = load_labels(labels_path)
     idx = indexer.build_index(db_dir)
 
@@ -57,7 +67,13 @@ def evaluate(db_dir: Path, input_dir: Path, labels_path: Path, *, topk: int, pha
         if not img_path.is_file():
             continue
         feats = features.compute_features(img_path)
-        cands = matcher.recall_candidates(feats, idx, topk=topk, phash_thresh=phash_thresh)
+        cands = matcher.recall_candidates(
+            feats,
+            idx,
+            topk=topk,
+            phash_thresh=phash_thresh,
+            vector_score_thresh=vector_score_thresh,
+        )
         rows = matcher.rerank_and_verify(
             img_path,
             cands,
@@ -141,6 +157,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--phash_thresh", type=int, default=10)
     p.add_argument("--orb_inliers_thresh", type=int, default=25)
     p.add_argument("--ncc_thresh", type=float, default=0.92)
+    p.add_argument("--vector_score_thresh", type=float, default=0.0)
     return p.parse_args()
 
 
@@ -161,6 +178,7 @@ def main() -> None:
         phash_thresh=args.phash_thresh,
         orb_inliers_thresh=args.orb_inliers_thresh,
         ncc_thresh=args.ncc_thresh,
+        vector_score_thresh=args.vector_score_thresh,
     )
     print(format_summary(stats))
 

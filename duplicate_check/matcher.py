@@ -171,7 +171,14 @@ def _best_orb_match(q_variants: List[Dict[str, Any]], db_variants: List[Dict[str
                 best_pair = (q_var.get("name"), d_var.get("name"))
     return best_good, best_len, best_pair
 
-def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phash_thresh: int = 10, tile_match_count: int = 3) -> List[Dict[str, Any]]:
+def recall_candidates(
+    features: ImageFeatures,
+    index: Dict,
+    topk: int = 50,
+    phash_thresh: int = 10,
+    tile_match_count: int = 3,
+    vector_score_thresh: float = 0.0,
+) -> List[Dict[str, Any]]:
     """Recall candidates by global pHash and tile-hash. Returns list of dicts with scores.
 
     通过全局 pHash 和块哈希召回候选，返回包含分数的字典列表。
@@ -251,9 +258,10 @@ def recall_candidates(features: ImageFeatures, index: Dict, topk: int = 50, phas
                                 score = float(1.0 / (1.0 + dist))
                             if score <= 0:
                                 continue
-                            entry = hits.setdefault(db_id, {"score": 0.0, "reason": []})
-                            entry["score"] += score
-                            entry.setdefault("reason", []).append(("vector", score))
+                            if score >= vector_score_thresh:
+                                entry = hits.setdefault(db_id, {"score": 0.0, "reason": []})
+                                entry["score"] += score
+                                entry.setdefault("reason", []).append(("vector", score))
         except Exception:
             pass
 
